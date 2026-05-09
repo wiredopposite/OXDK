@@ -170,27 +170,16 @@ cxbe from NXDK handles PE-to-XBE conversion. During testing we made two tweaks f
 
 ## Asset Tools
 
-### `tools/xbx/xbx_convert.py` — XPR0 texture converter
+### `tools/xbx/` — XPR0 texture converter
 
-Bidirectional converter between Xbox XPR0 (`.xbx`) textures and standard image formats. Useful for extracting assets from an existing title or producing new ones from PNGs.
+Bidirectional converter between Xbox XPR0 (`.xbx`) textures and standard image formats. Useful for extracting assets from an existing title, producing new ones from PNGs, or modifying skin artwork for dashboards like [UIX-Lite](https://github.com/OfficialTeamUIX/UIX-Lite) and [Theseus](https://github.com/MrMilenko/Theseus).
 
-```sh
-# Decode an .xbx texture to PNG
-./tools/xbx/xbx_convert.py decode input.xbx output.png
+Two implementations:
 
-# Encode a PNG to .xbx (DXT1, lossy compressed — default)
-./tools/xbx/xbx_convert.py encode input.png output.xbx
+- **`tools/xbx/go/`** — pure Go, zero dependencies. Pre-built binaries for Linux/macOS/Windows (amd64 + arm64) are attached to each [release](https://github.com/MrMilenko/OXDK/releases). Recommended for skinners.
+- **`tools/xbx/xbx_convert.py`** — Python + Pillow. Functionally equivalent.
 
-# Encode as uncompressed ARGB8888 (larger, lossless)
-./tools/xbx/xbx_convert.py encode input.png output.xbx --format argb8888
-
-# Print header info (dimensions, format, sizes)
-./tools/xbx/xbx_convert.py info input.xbx
-```
-
-Decode supports DXT1/3/5, A8R8G8B8, X8R8G8B8, R5G6B5, A1R5G5B5, X1R5G5B5, A4R4G4B4, L8, AL8, P8, and their `LIN_*` (non-swizzled) variants. Encode supports DXT1 and ARGB8888. Handles both swizzled (Morton / Z-order) and linear layouts with NV2A 64-byte pitch alignment.
-
-Requires Python 3 and Pillow.
+See [`tools/xbx/README.md`](tools/xbx/README.md) for the full skinner workflow and developer notes.
 
 ## Limitations
 

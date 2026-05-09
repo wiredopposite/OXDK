@@ -16,4 +16,14 @@ xdk/include/*
 
 # cxbe binary
 tools/cxbe/cxbe
+
+# xbx-convert (Go) build output
+tools/xbx/go/xbx-convert
+tools/xbx/go/xbx-convert.exe
+tools/xbx/go/dist/
+
+# xbx-convert dev samples
+tools/xbx/nanoha.png
+tools/xbx/nanoha.xbx
+
 .DS_Store
