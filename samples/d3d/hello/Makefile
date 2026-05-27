@@ -5,7 +5,7 @@
 #   2. Run: make
 #   3. Copy bin/default.xbe to your Xbox
 
-OXDK_DIR  = ../..
+OXDK_DIR  = ../../..
 XBE_TITLE = Hello
 XBE_MODE  = RETAIL
 

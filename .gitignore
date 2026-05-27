@@ -3,6 +3,9 @@ xdk/lib/*.lib
 xdk/include/*
 !xdk/include/.gitkeep
 
+# Prebuilt sample bundles (regenerable build output)
+dist/
+
 # Build output (but not the bin/ wrapper scripts)
 **/bin/*.obj
 **/bin/*.exe
