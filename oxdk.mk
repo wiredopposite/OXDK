@@ -4,7 +4,7 @@
 #   OXDK_DIR    - path to this OXDK directory
 #   XDK_DIR     - path to installed XDK (e.g. copied from C:\Program Files\Microsoft Xbox SDK\xbox)
 #   XDK_PRV_DIR - path to private Xbox tree (optional, for dashboard/internal builds)
-#   SRCS        - list of .cpp source files
+#   SRCS        - list of source files (.c, .cc, .cpp)
 #   XBE_TITLE   - title string for the XBE
 #   XBE_MODE    - DEBUG or RETAIL (default: RETAIL)
 
@@ -25,6 +25,12 @@ ifeq ($(XBE_TITLE),)
 XBE_TITLE = XDK App
 endif
 
+# XBE_TITLE doubles as the output filename base, so it stays space free.
+# XBE_NAME is the title shown on the dashboard and may contain spaces.
+ifeq ($(XBE_NAME),)
+XBE_NAME = $(XBE_TITLE)
+endif
+
 ifeq ($(XBE_MODE),)
 XBE_MODE = RETAIL
 endif
@@ -35,22 +41,53 @@ endif
 
 CXBE = $(OXDK_DIR)/tools/cxbe/cxbe
 
-# Compiler flags -- target Xbox Pentium III, MSVC 7.1 ABI compatibility
+# Modern C++ stdlib (libc++) is opt-in via OXDK_LIBCXX=1. The XDK's own STL is
+# C++98, so C++11+ apps need libc++. That requires a newer MSVC-compat version
+# (char16_t/char32_t became keywords at 19.00) and the libc++ headers ahead of
+# the XDK's C++-ified C headers on the include path. Default mode is untouched.
+OXDK_MSC_VER ?= 13.10
+ifeq ($(OXDK_LIBCXX),1)
+OXDK_MSC_VER := 19.00
+OXDK_LIBCXX_DIR ?= /opt/homebrew/opt/llvm/include/c++/v1
+OXDK_CLANG_RES  := $(shell clang -print-resource-dir)/include
+# Our __config_site (threads/filesystem/localization off) wins for
+# <__config_site>, then libc++ proper, then the clean-C-header shims, then
+# clang builtins, then the XDK headers (as -isystem so they lose to libc++).
+OXDK_LIBCXX_INC = -nostdinc++ \
+	-isystem $(OXDK_DIR)/oxdk/libcxx-config \
+	-isystem $(OXDK_LIBCXX_DIR) \
+	-isystem $(OXDK_DIR)/oxdk/libcxx-cshim \
+	-isystem $(OXDK_CLANG_RES)
+# clang emits the v3 C++ EH personality (__CxxFrameHandler3) but the MSVC 7.1
+# era XDK CRT only ships the v1 handler, and the two unwind ABIs are not
+# compatible. Build libc++ without exceptions; it turns throws into aborts.
+OXDK_LIBCXX_CXX = -fno-exceptions
+OXDK_XDK_INC = -isystem $(XDK_DIR)/include
+else
+OXDK_XDK_INC = -I$(XDK_DIR)/include
+endif
+
+# Target the Xbox Pentium III with MSVC ABI compatibility.
 OXDK_TARGET_FLAGS = -target i386-pc-windows-msvc -march=pentium3 \
-	-fms-extensions -fms-compatibility -fms-compatibility-version=13.10 \
+	-fms-extensions -fms-compatibility -fms-compatibility-version=$(OXDK_MSC_VER) \
 	-fdelayed-template-parsing
 
-OXDK_CFLAGS = $(OXDK_TARGET_FLAGS) -c \
-	-D_XBOX -D_X86_ -DWIN32_LEAN_AND_MEAN -D_NTOS_ \
+# stdcall default mirrors MSVC /Gz so .c and .cpp emit matching decorated
+# symbols. Required for kernel imports (@N-decorated).
+OXDK_COMMON_FLAGS = -D_XBOX -D_X86_ -DWIN32_LEAN_AND_MEAN -D_NTOS_ -D_MT \
 	-Wno-microsoft-include -Wno-pragma-pack -Wno-ignored-pragmas \
 	-Wno-deprecated-declarations -Wno-writable-strings -Wno-microsoft-cast \
 	-Wno-unknown-pragmas -Wno-extra-tokens -Wno-nonportable-include-path \
 	-Wno-typedef-redefinition \
-	-I$(OXDK_DIR) -I$(XDK_DIR)/include
-
-# C++ flags -- MSVC /Gz (__stdcall default) is MANDATORY for XDK compatibility
-OXDK_CXXFLAGS = $(OXDK_CFLAGS) -fno-rtti -fno-exceptions \
 	-Xclang -fdefault-calling-conv=stdcall
+
+OXDK_CFLAGS = $(OXDK_TARGET_FLAGS) -c $(OXDK_COMMON_FLAGS) \
+	-I$(OXDK_DIR) $(OXDK_XDK_INC)
+
+# -fno-rtti: the XDK CRT ships no RTTI. In libc++ mode the libc++ headers go
+# ahead of the XDK include and exceptions are dropped (OXDK_LIBCXX_CXX above).
+OXDK_CXXFLAGS = $(OXDK_TARGET_FLAGS) -c $(OXDK_COMMON_FLAGS) -fno-rtti \
+	$(OXDK_LIBCXX_CXX) $(OXDK_LIBCXX_INC) -I$(OXDK_DIR) $(OXDK_XDK_INC)
 
 # Linker flags
 OXDK_LDFLAGS = /nologo /subsystem:windows /fixed:no /base:0x00010000 /stack:1048576 \
@@ -72,6 +109,12 @@ OXDK_KERNEL_IMPORTS = \
 	/alternatename:__imp__IoDismountVolumeByName=__imp__IoDismountVolumeByName@4 \
 	/alternatename:__imp__MmFreeContiguousMemory=__imp__MmFreeContiguousMemory@4
 
+# clang-emitted CRT helpers. With stdcall default, clang's codegen asks for
+# the @N form but libcmt ships them cdecl-decorated. Redirect at link time.
+OXDK_CRT_HELPERS = \
+	/alternatename:__ftol@8=__ftol \
+	/alternatename:__ftol2@8=__ftol2
+
 # Default XDK libs (debug). Override OXDK_LIBS in your Makefile before including oxdk.mk.
 OXDK_LIBS ?= libcmtd.lib libcpmtd.lib xboxkrnl.lib \
 	d3d8d.lib d3dx8d.lib xgraphicsd.lib dsoundd.lib \
@@ -79,7 +122,17 @@ OXDK_LIBS ?= libcmtd.lib libcpmtd.lib xboxkrnl.lib \
 	xapilibd.lib xapilib.lib xapilibp.lib
 
 # Build rules
-OBJS = $(addprefix $(OUTPUT_DIR)/,$(SRCS:.cpp=.obj))
+# OBJS handles .cpp, .cc and .c sources. Path separators in the source
+# (libSDLx is pulled in with absolute paths) flatten to their basenames
+# so a long source tree doesn't create a deeply nested OUTPUT_DIR.
+SRCS_BASE := $(notdir $(SRCS))
+OBJS_TMP  := $(patsubst %.cpp,%.obj,$(SRCS_BASE))
+OBJS_TMP  := $(patsubst %.cc,%.obj,$(OBJS_TMP))
+OBJS      := $(addprefix $(OUTPUT_DIR)/,$(patsubst %.c,%.obj,$(OBJS_TMP)))
+
+# Per-source vpath so the .cpp/.c pattern rules can find sources in
+# subdirectories (libSDLx is at ../../third-party/libSDLx/...).
+VPATH := $(sort $(dir $(SRCS)))
 
 .PHONY: all clean normalize-xdk
 
@@ -90,13 +143,17 @@ normalize-xdk:
 	$(OXDK_DIR)/tools/normalize-xdk.sh $(XDK_DIR)
 
 $(OUTPUT_DIR)/default.xbe: $(OUTPUT_DIR)/$(XBE_TITLE).exe $(CXBE)
-	$(CXBE) -MODE:$(XBE_MODE) -TITLE:"$(XBE_TITLE)" -OUT:$@ $<
+	$(CXBE) -MODE:$(XBE_MODE) -TITLE:"$(XBE_NAME)" -OUT:$@ $<
 
 $(OUTPUT_DIR)/$(XBE_TITLE).exe: $(OBJS)
-	lld-link $(OXDK_LDFLAGS) $(OXDK_KERNEL_IMPORTS) $(LDFLAGS) \
+	lld-link $(OXDK_LDFLAGS) $(OXDK_KERNEL_IMPORTS) $(OXDK_CRT_HELPERS) $(LDFLAGS) \
 		/map:$(OUTPUT_DIR)/$(XBE_TITLE).map /out:$@ $^ $(OXDK_LIBS) $(LIBS)
 
 $(OUTPUT_DIR)/%.obj: %.cpp | $(OUTPUT_DIR)
+	@mkdir -p $(dir $@)
+	clang++ $(OXDK_CXXFLAGS) $(CXXFLAGS) -o $@ $<
+
+$(OUTPUT_DIR)/%.obj: %.cc | $(OUTPUT_DIR)
 	@mkdir -p $(dir $@)
 	clang++ $(OXDK_CXXFLAGS) $(CXXFLAGS) -o $@ $<
 
