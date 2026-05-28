@@ -1,136 +1,114 @@
-# How We Got Here
+# OXDK Notes
 
-A development log for OXDK, covering the discovery process, the failures, the fixes, and the edge cases that almost made us quit.
+The non-obvious things that make OXDK work, and what to check when something
+breaks. If you just want to build, include `oxdk.mk` and look at `samples/`;
+it already handles everything below. This file is the "why" behind it.
 
-## The Problem
+## Background
 
-The Theseus project -- a decompilation of the original Xbox Dashboard -- was being developed on a Windows XP VM running Visual Studio .NET 2003. The build machine was a Thinkpad accessible via network share. Compiling meant saving files on macOS, waiting for the share to sync, switching to the VM, clicking Build, waiting, then FTPing the XBE to the Xbox for testing. A change-compile-test cycle took minutes.
+Compiling 2003-era Xbox code used to mean a Windows VM and Visual Studio .NET
+2003. clang can target `-target i386-pc-windows-msvc` (Pentium III, MSVC ABI,
+PE/COFF) and lld-link reads MSVC COFF libraries, so you can build against the
+real Microsoft XDK from macOS or Linux. There are a handful of sharp edges.
+Here they are.
 
-The question was simple: can we cut Windows out entirely and compile Xbox code on macOS?
+## The flag you cannot skip: stdcall
 
-## The Discovery Phase
+The XDK compiles everything with MSVC `/Gz`, making `__stdcall` the default
+calling convention (the callee cleans the stack). clang defaults to `__cdecl`
+(the caller cleans). Mix the two and the stack pointer drifts four bytes per
+argument per call until something corrupts. The symptoms are random crashes
+with no error message, which makes it brutal to find.
 
-### Can clang target Xbox?
+Fix: `-Xclang -fdefault-calling-conv=stdcall`. oxdk.mk sets it for both C and
+C++ so calls across translation units agree (asymmetric defaults broke samples
+like testgamecontroller). Variadic functions stay cdecl regardless, which is
+correct.
 
-The Xbox CPU is a Pentium III running a stripped Windows 2000 kernel. MSVC 7.1 targets `i386` with the Windows MSVC ABI. Clang supports `-target i386-pc-windows-msvc`, which produces PE/COFF object files with MSVC-compatible name mangling and calling conventions.
+## XDK header ordering: xdk_compat.h
 
-The NXDK project had already proven that clang + lld-link could produce bootable Xbox executables -- but NXDK replaces the entire XDK runtime with open-source alternatives. We wanted to use the original Microsoft XDK libraries directly. Same libs the retail dashboard was linked against.
+The XDK headers expect MSVC include ordering. NT kernel types (`NTSTATUS`,
+`STRING`, `OBJECT_ATTRIBUTES`) must exist before `xtl.h` reaches `winbase.h`.
+MSVC's precompiled headers did this implicitly; clang needs help. `xdk_compat.h`
+is force-included (`-include`) to pull the NT types in the right order and set
+the guards that stop the XDK headers from redefining them.
 
-### First compile attempt
+## Kernel import decoration
+
+`xboxkrnl.lib` exports stdcall-decorated names (`_HalReturnToFirmware@4`); clang
+emits undecorated imports (`__imp__HalReturnToFirmware`), and lld-link cannot
+match them. oxdk.mk carries `/alternatename` mappings for the common kernel
+functions. Call one that is not mapped and you get an undefined symbol; add:
 
 ```
-clang++ -target i386-pc-windows-msvc -march=pentium3 -c main.cpp
+/alternatename:__imp__YourFunction=__imp__YourFunction@N
 ```
 
-Immediate wall of errors. The XDK headers assume MSVC-specific include ordering. Types like `NTSTATUS`, `STRING`, `OBJECT_ATTRIBUTES` get defined by NT kernel headers (`ntdef.h`, `ntos.h`) which need to be included before the XDK's `xtl.h` touches `winbase.h`. MSVC's precompiled header system handles this implicitly. Clang doesn't have that luxury.
+where `N` is the parameter size in bytes (one DWORD is 4).
 
-**Solution**: `xdk_compat.h`, force-included via `-include xdk_compat.h`. This pulls in the NT type definitions in the right order and sets include guards (`_WINNT_`, `_INTERLOCKED_DEFINED`) to prevent the XDK headers from redefining things.
+## PE to XBE: cxbe
 
-### Linking
+Xbox executables are XBE, not PE. cxbe (from nxdk) does the conversion. Two
+tweaks were needed for XDK-linked binaries: every section is marked executable,
+and the library version table is read from the PE's `.XBLD` section instead of
+a placeholder so the kernel initializes D3D, DirectSound, and XNet. Both
+changes landed in the same session as the stdcall fix and were never isolated,
+so one of them may be unnecessary. Test one thing at a time.
 
-lld-link handles MSVC COFF libraries natively. Pointed it at the XDK `.lib` files and... it mostly worked. Except for kernel imports.
+## Modern C++: the STL situation
 
-The Xbox kernel (`xboxkrnl.lib`) exports functions with stdcall decoration: `_HalReturnToFirmware@4`. Clang generates undecorated imports: `__imp__HalReturnToFirmware`. The linker can't match them.
+The XDK ships MSVC 7.1's STL, which is C++98. There is no `<type_traits>`,
+`<random>`, `<unordered_map>`, `<chrono>`, and so on, and it uses pre-C++17
+constructs (dynamic exception specifications) that current clang rejects.
+Do not fight it.
 
-**Solution**: `/alternatename` directives mapping undecorated names to their decorated equivalents:
+Set `OXDK_LIBCXX=1` instead. OXDK routes the whole C++ standard library to
+LLVM's libc++ layered over the XDK CRT, giving you real C++17. The support
+files are in `oxdk/`: a target-tuned `__config_site`, clean C-header shims so
+libc++ and the XDK headers coexist, and the few runtime symbols libc++ expects
+from its prebuilt library. `samples/libcxx/cxx17_hello` and `samples/sdl2x/scene`
+build this way. You need libc++ headers on the host (`brew install llvm` on
+macOS, or point `OXDK_LIBCXX_DIR` at your `include/c++/v1`).
 
-```
-/alternatename:__imp__HalReturnToFirmware=__imp__HalReturnToFirmware@4
-```
+Two things to know about libc++ mode:
 
-One per kernel function. Tedious but mechanical -- count the parameter bytes, append `@N`.
+- It raises MSVC-compat to 19.00 (`char16_t` / `char32_t` are keywords only
+  there) and reorders includes so libc++ wins over the XDK's C-but-also-C++
+  headers.
+- It builds with `-fno-exceptions`. clang emits the v3 exception personality
+  but the MSVC 7.1 CRT only has v1, and the unwind ABIs are incompatible, so
+  throws become aborts.
 
-### PE to XBE
+## Black screens are usually not crashes
 
-Xbox executables are XBE files, not standard PE. NXDK's `cxbe` tool converts PE to XBE. Grabbed it, ran it, got an XBE. Copied to Xbox. Black screen.
+- **Debug libraries assert.** `dsoundd.lib` and `d3d8d.lib` call `RtlAssert`,
+  which halts the thread with no debugger attached and looks exactly like a
+  hang. Link the release libs (`dsound.lib`, `d3d8.lib`) for clean runs.
+- **Stack too small.** Use `/stack:1048576` (1MB). 64KB overflows during boot
+  before any crash handler exists.
 
-## The Crash Investigation
+## Case sensitivity (Linux and case-sensitive filesystems)
 
-### The stdcall catastrophe
+Two versions of the same problem:
 
-First working XBE: boots, shows the splash screen, crashes immediately when any real code runs.
+- The XDK ships mixed-case filenames (`XTL.H`, `D3d8.h`) but source includes
+  them lowercase. macOS does not care; Linux does. Run
+  `tools/normalize-xdk.sh xdk/` once to lowercase the tree (it is a no-op on
+  case-insensitive filesystems and detects genuine collisions), or
+  `make normalize-xdk`.
+- If your own source has a filename that collides with a system header modulo
+  case (Theseus had `Locale.h` versus the CRT's `locale.h`), use `-iquote` for
+  your source directory so angle-bracket includes skip it.
 
-The Xbox XDK compiles everything with `/Gz` -- default `__stdcall` calling convention. This means the callee cleans the stack. Clang defaults to `__cdecl` where the caller cleans the stack. When clang-compiled code calls an XDK library function (stdcall), both sides think they own stack cleanup. The stack pointer drifts by 4 bytes per argument per call. It might survive one or two calls before memory corruption takes over.
+## Where to go from here
 
-This was the hardest bug to find because the symptoms are random. Sometimes it crashes in D3D init. Sometimes it gets further. Sometimes it corrupts a return address and jumps to garbage. No consistent repro.
+- Include `oxdk.mk` and copy `Makefile.template`; it applies everything above.
+- `samples/` has working builds per library: `d3d/`, `libsdlx/`, `sdl2x/`,
+  `libcxx/`.
+- For SDL 2, `third-party/SDL2x/oxdk/sdl2x.mk` builds any libSDL2x consumer;
+  the sample Makefiles are about fifteen lines each.
+- For modern C++, set `OXDK_LIBCXX=1`.
 
-**The fix**: `-Xclang -fdefault-calling-conv=stdcall`
-
-One flag. That's it. Hours of debugging for one compiler flag.
-
-**Critical detail**: This flag only goes in `CXXFLAGS`, not `CFLAGS`. C functions use explicit `WINAPI`/`WSAAPI` attributes for their calling convention. Forcing stdcall on C code can break things that expect cdecl (like variadic functions, which can't be stdcall).
-
-### cxbe section flags
-
-While debugging the stdcall issue, we also noticed that cxbe wasn't marking all XBE sections as executable. The Xbox kernel's section loader may need the executable flag set on data sections -- we're honestly not 100% sure this was causing problems independently, or if the stdcall fix was the real breakthrough. We made both changes during the same debugging session and never went back to isolate which one mattered.
-
-The change is one line in `Xbe.cpp`: unconditionally set `bExecutable = true` on all section headers.
-
-### cxbe library versions
-
-Xbox subsystem initialization (D3D, DirectSound, XNet) checks the XBE's library version table to determine which subsystem version to activate. Stock cxbe creates a placeholder `CXBE0` entry. The Xbox kernel doesn't recognize it and doesn't initialize the subsystems properly.
-
-**Fix**: Read the actual library version entries from the PE's `.XBLD` section (which the XDK linker embeds) instead of generating placeholders. Also correctly set `dwKernelLibraryVersionAddr` and `dwXAPILibraryVersionAddr` in the XBE header.
-
-## Edge Cases and Gotchas
-
-### The dsound debug assert black screen
-
-After getting the basic build working, we hit a persistent black screen that turned out to be `dsoundd.lib` (the debug DirectSound library) asserting internally in `mcpxcore.cpp`. Without a debugger attached, `RtlAssert` just halts the thread. The Xbox sits there with a black screen, looking exactly like a crash.
-
-**Fix**: Use `dsound.lib` (release) instead of `dsoundd.lib`. Same for `d3d8.lib` vs `d3d8d.lib` -- the debug libs assert on things that aren't actually errors, they're validation checks that assume a debugger is present.
-
-This one cost us a few hours because every build iteration looked like "still broken" when it was actually "working fine but paused on an assert nobody can see."
-
-### The 64KB stack
-
-An early iteration of the Makefile had `/stack:65536` (64KB). The working MSVC build used `/stack:1048576` (1MB). The Xbox kernel and XDK runtime expect a reasonably large stack for initialization. With 64KB, the boot process stack-overflows before D3D even initializes.
-
-Symptom: black screen. No crash handler fires because the stack is already gone.
-
-### The Locale.h / locale.h case sensitivity collision
-
-macOS APFS is case-insensitive by default. The Theseus source tree has `Locale.h` (the Xbox locale node header). The MSVC 7.1 STL has `#include <locale.h>` (the C standard locale header). On macOS, `<locale.h>` finds `Locale.h` instead. The STL then fails because the Xbox locale node header doesn't define `lconv` or `LC_COLLATE`.
-
-**Fix**: Use `-iquote` instead of `-I` for the source directory. Angle-bracket includes (`<locale.h>`) skip `-iquote` paths and find the real CRT header. Quoted includes (`"Locale.h"`) still find the source file.
-
-This one was particularly annoying because the error messages are deep in the STL template instantiation chain and don't mention `locale.h` at all. You see `unknown type name 'lconv'` in `xlocinfo` and spend 20 minutes wondering what `xlocinfo` even is.
-
-### The MSVC 7.1 STL and clang
-
-The XDK ships MSVC 7.1's STL implementation. It's old. It has:
-
-- Missing `typename` keywords in dependent contexts (required by the C++ standard, ignored by MSVC)
-- `try`/`catch` blocks in `<istream>` and `<xstring>` (breaks with `-fno-exceptions`)
-- Debug heap allocator templates that instantiate differently than MSVC expects
-
-We patched `xstring` to add the missing `typename` and dropped `-fno-exceptions` from the build. The STL headers need exception syntax even though Xbox code never actually throws.
-
-### The CRT include path
-
-The XDK's CRT headers (`locale.h`, `stdio.h`, etc.) live in a `crt/` subdirectory under the SDK include path. The STL headers expect them to be directly findable. Adding `-I$(SDK_INC)/crt` to the include path fixes it, but it has to come after the source includes to avoid shadowing.
-
-## What We Learned
-
-1. **Calling conventions are invisible until they're catastrophic.** The stdcall/cdecl mismatch produces symptoms that look like memory corruption, random crashes, or "the Xbox just doesn't like this binary." There's no error message. It just breaks.
-
-2. **Debug libraries assume debuggers exist.** The Xbox debug libs (`dsoundd.lib`, `d3d8d.lib`) fire `RtlAssert` which halts the thread. Without XBDM attached, this looks identical to a crash or hang.
-
-3. **Case sensitivity matters on case-insensitive filesystems.** When your source file and a system header share a name (modulo case), the include path order determines which one wins. `-iquote` is the clean fix.
-
-4. **The XDK header chain has a specific order.** NT kernel types must be defined before `xtl.h` is processed. The force-include shim (`xdk_compat.h`) exists entirely to enforce this order.
-
-5. **Test one variable at a time.** We made the cxbe section flag fix and the stdcall fix in the same session and never isolated which one actually mattered. Don't do that.
-
-## Timeline
-
-All times US Eastern. This whole thing took about a day and a half.
-
-- **2026-04-05 ~12:00** -- "What if we just... used clang?" First compile attempt. Wall of XDK header errors.
-- **2026-04-05 ~13:30** -- `xdk_compat.h` created. Headers compile. Linker explodes on kernel imports.
-- **2026-04-05 ~14:15** -- `/alternatename` mappings added. First clean link. cxbe produces XBE.
-- **2026-04-05 ~14:45** -- First boot attempt. Black screen. Begin staring at hex dumps.
-- **2026-04-05 ~17:00** -- Identified stdcall/cdecl mismatch via Ghidra stack analysis. Added `-Xclang -fdefault-calling-conv=stdcall`.
-- **2026-04-05 ~17:20** -- First successful boot on real Xbox hardware. Dashboard loads, UI renders, scripts run.
-- **2026-04-05 ~18:00** -- cxbe patched (section flags, library versions). OXDK repo created.
-- **2026-04-05 ~22:00** -- Dolphin demo working. README written. Pushed v1.
+OXDK was built to compile the Xbox side of [Theseus](https://github.com/MrMilenko/Theseus),
+the reverse-engineered Xbox Dashboard engine that also powers UIX Desktop on
+macOS, Linux, and Windows. Tested on real hardware by [TeamUIX](https://github.com/OfficialTeamUIX).

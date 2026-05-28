@@ -6,6 +6,19 @@ Built for [Theseus](https://github.com/MrMilenko/Theseus) development because us
 
 When we say "we" in this document, it's the royal We. It sounds better than "I did this alone in my living room on painkillers." Tested on real hardware by members of [TeamUIX](https://github.com/OfficialTeamUIX).
 
+## Showcase
+
+OXDK compiles the Xbox side of [Theseus](https://github.com/MrMilenko/Theseus), the reverse-engineered original Xbox Dashboard engine. The same engine powers UIX Desktop on macOS, Linux, and Windows from the shared repo. Here it is on real hardware:
+
+<img src="docs/screenshots/theseus_xbox_build.png" width="480">
+
+The samples in this repo are all built with OXDK and booted on a console too. Left to right: the OXDK Summer 2026 Demo (SDL 2 video and input with a libc++ block breaker), then RXDK-SDL2x plasma, starfield, and testgamecontroller.
+
+<img src="docs/screenshots/oxdk_summer_demo_2026.png" width="240"> <img src="docs/screenshots/rxdk-sdl2x_plasma_example.png" width="240">
+<img src="docs/screenshots/rxdk-sdl2x_starfield_example.png" width="240"> <img src="docs/screenshots/rxdk-sdl2x_testgamecontroller_example.png" width="240">
+
+Shots are framebuffer captures over XBDM from a debug Xbox.
+
 ## What This Is
 
 OXDK bridges the gap between modern clang and the Microsoft Xbox SDK (circa 2003). It handles the ABI differences, calling conventions, header conflicts, and PE-to-XBE conversion needed to produce bootable Xbox executables from a Unix-based host.
@@ -72,7 +85,7 @@ It's a no-op on case-insensitive filesystems, so it's safe to run on macOS too.
 ### 5. Verify
 
 ```sh
-cd examples/hello
+cd samples/d3d/hello
 make
 ```
 
@@ -143,6 +156,20 @@ cxbe -MODE:RETAIL -TITLE:"My App" -OUT:default.xbe myapp.exe
 
 The flag you absolutely cannot skip is **`-Xclang -fdefault-calling-conv=stdcall`**. Without it, every function call between your code and the XDK libs corrupts the stack.
 
+## SDL and Modern C++
+
+OXDK builds real libraries against the XDK, not just bare D3D. Each one has samples under `samples/`:
+
+- **SDL 1.2** via [libSDLx](https://github.com/HyperEye/SDLx). See `samples/libsdlx/sdl_test`.
+- **SDL 2** via [RXDK-SDL2x](https://github.com/Team-Resurgent/RXDK-SDL2x). The `third-party/SDL2x/oxdk/sdl2x.mk` glue builds any libSDL2x consumer in about fifteen lines; `samples/sdl2x/` has ten of them. Our local fixes to the port live in that vendored tree, pending upstream PRs.
+- **Modern C++17** via libc++. The XDK's own STL is C++98, so anything that touches `std::vector`, `std::unordered_map`, `<random>`, `<type_traits>` and friends needs a modern standard library. Set `OXDK_LIBCXX=1` and OXDK routes the C++ stdlib to LLVM's libc++ (the support files live in `oxdk/`). This needs libc++ headers on the host; `brew install llvm` provides them on macOS, otherwise point `OXDK_LIBCXX_DIR` at your libc++ `include/c++/v1`.
+
+`samples/sdl2x/scene` ties it together: SDL 2 video and input, a libc++ block breaker, all linked against the genuine XDK.
+
+## Debugging
+
+For live `OutputDebugString` / `DbgPrint` output and XBDM probes on macOS and Linux, use [xbMacson](https://github.com/MrMilenko/xbMacson), a cross-platform terminal Xbox Debug Monitor that clones xbWatson's notification model. It pairs naturally with OXDK builds and captured the framebuffer screenshots above.
+
 ## Kernel Import Decorations
 
 Clang generates undecorated import symbols, but `xboxkrnl.lib` uses stdcall-decorated names (`__imp__FunctionName@N`). OXDK includes mappings for common kernel functions in `oxdk.mk`. If you call a kernel function that isn't mapped, you'll get an undefined symbol error at link time. Fix it by adding:
@@ -196,8 +223,18 @@ OXDK/
     oxdk-cc            C compiler wrapper
     oxdk-cxx           C++ compiler wrapper
     oxdk-link          linker wrapper
-  examples/
-    hello/             minimal D3D test app (definitely not a dolphin)
+  oxdk/                modern C++ (libc++) support, enabled with OXDK_LIBCXX=1
+    libcxx-config/     __config_site tuned for the i386-xbox target
+    libcxx-cshim/      clean C headers that coexist with libc++
+    libcxx-shim/       runtime pieces libc++ normally pulls from libc++.a
+  samples/
+    d3d/hello/             minimal D3D test app (definitely not a dolphin)
+    libsdlx/sdl_test/      SDL 1.2 sample (libSDLx)
+    sdl2x/                 SDL 2 samples (RXDK-SDL2x), including the scene demo
+    libcxx/cxx17_hello/    modern C++17 on libc++, no SDL
+  third-party/
+    libSDLx/           vendored SDL 1.2 Xbox port
+    SDL2x/             vendored RXDK-SDL2x (SDL 2) with our patches + oxdk/ glue
   tools/
     cxbe/              PE-to-XBE converter from NXDK, tweaked for XDK binaries
     xbx/               Xbox XPR0 (.xbx) texture <-> PNG converter
@@ -214,10 +251,19 @@ OXDK/
 
 Thanks to the [NXDK](https://github.com/XboxDev/nxdk) team. cxbe comes from their project, and their work proving that clang and lld-link could target the Xbox is what made this possible. OXDK takes a different approach, using the original XDK libraries instead of replacing them, but the foundation they built on the toolchain side saved us a lot of time.
 
+The libraries OXDK builds against are other people's work; we only wrote the toolchain glue:
+
+- **SDL**, from [libsdl.org](https://www.libsdl.org/).
+- **libSDLx**, the SDL 1.2 Xbox port originally by Lantus, vendored from [HyperEye/SDLx](https://github.com/HyperEye/SDLx). It bundles its own zlib, freetype, vorbis, and friends.
+- **RXDK-SDL2x** and **RXDK**, the SDL 2 port and modern Xbox dev environment from [Team Resurgent](https://github.com/Team-Resurgent).
+- **libc++**, from the [LLVM project](https://github.com/llvm/llvm-project).
+
 ## License
 
 The OXDK shim code (scripts, oxdk.mk, xdk_compat.h) is public domain. Do whatever you want with it.
 
 cxbe is from [NXDK](https://github.com/XboxDev/nxdk) and carries its original license (see `tools/cxbe/` for details).
+
+The vendored libraries under `third-party/` (libSDLx, RXDK-SDL2x) carry their own upstream licenses; see each tree. Our patches to them are offered back under the same terms.
 
 The Microsoft Xbox SDK is proprietary. OXDK does not include any Microsoft code. You are responsible for obtaining and licensing the SDK files yourself.
