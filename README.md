@@ -12,7 +12,7 @@ OXDK compiles the Xbox side of [Theseus](https://github.com/MrMilenko/Theseus), 
 
 <img src="docs/screenshots/theseus_xbox_build.png" width="480">
 
-The samples in this repo are all built with OXDK and booted on a console too. Left to right: the OXDK Summer 2026 Demo (SDL 2 video and input with a libc++ block breaker), then RXDK-SDL2x plasma, starfield, and testgamecontroller.
+The samples in this repo are all built with OXDK and booted on a console too. Left to right: the OXDK Summer 2026 Demo (SDL 2 video and input with a block breaker mini game in libc++), then RXDK-SDL2x plasma, starfield, and testgamecontroller.
 
 <img src="docs/screenshots/oxdk_summer_demo_2026.png" width="240"> <img src="docs/screenshots/rxdk-sdl2x_plasma_example.png" width="240">
 <img src="docs/screenshots/rxdk-sdl2x_starfield_example.png" width="240"> <img src="docs/screenshots/rxdk-sdl2x_testgamecontroller_example.png" width="240">
