@@ -37,7 +37,7 @@ This is not [NXDK](https://github.com/XboxDev/nxdk). NXDK is an open-source Xbox
   - Linux: install the `lld` package from your distro
 - **Microsoft Xbox SDK** headers and libraries (you supply these)
 - **make** (GNU make)
-- **Python 3** and **Pillow** — optional, only needed for `tools/xbx/xbx_convert.py` (`pip install Pillow`)
+- **Python 3** and **Pillow**: optional, only needed for `tools/xbx/xbx_convert.py` (`pip install Pillow`)
 
 ## Getting Started
 
@@ -197,20 +197,20 @@ cxbe from NXDK handles PE-to-XBE conversion. During testing we made two tweaks f
 
 ## Asset Tools
 
-### `tools/xbx/` — XPR0 texture converter
+### `tools/xbx/`: XPR0 texture converter
 
 Bidirectional converter between Xbox XPR0 (`.xbx`) textures and standard image formats. Useful for extracting assets from an existing title, producing new ones from PNGs, or modifying skin artwork for dashboards like [UIX-Lite](https://github.com/OfficialTeamUIX/UIX-Lite) and [Theseus](https://github.com/MrMilenko/Theseus).
 
 Two implementations:
 
-- **`tools/xbx/go/`** — pure Go, zero dependencies. Pre-built binaries for Linux/macOS/Windows (amd64 + arm64) are attached to each [release](https://github.com/MrMilenko/OXDK/releases). Recommended for skinners.
-- **`tools/xbx/xbx_convert.py`** — Python + Pillow. Functionally equivalent.
+- **`tools/xbx/go/`**: pure Go, zero dependencies. Pre-built binaries for Linux/macOS/Windows (amd64 + arm64) are attached to each [release](https://github.com/MrMilenko/OXDK/releases). Recommended for skinners.
+- **`tools/xbx/xbx_convert.py`**: Python + Pillow. Functionally equivalent.
 
 See [`tools/xbx/README.md`](tools/xbx/README.md) for the full skinner workflow and developer notes.
 
 ## Limitations
 
-- **Modded consoles only.** XBE section digests and the digital signature are zeroed out. Stock retail consoles will reject them. TSOP, modchip, and Cerbios all work fine.
+- **Modded consoles only.** XBE section digests and the digital signature are zeroed out. Stock retail consoles will reject them. Softmod, TSOP, and modchip all work fine.
 - **D3D debug asserts.** If you link debug D3D libs (`d3d8d.lib`) and have a debugger attached, you'll hit assert breakpoints. Use release libs (`d3d8.lib`) for clean runs, or just don't attach a debugger.
 - **For-loop scoping.** MSVC 7.1 leaks variables declared in for-init into the enclosing scope (`/Zc:forScope-`). Clang follows the C++ standard. If you're porting older XDK code, you may need to hoist variable declarations above for-loops.
 - **No guarantees.** This was built to compile one specific project. It works for that. It might work for yours. It might not. Good luck.
