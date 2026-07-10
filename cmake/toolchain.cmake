@@ -1,15 +1,16 @@
 # toolchain.cmake -- CMake toolchain for Xbox XDK cross-compilation (clang/clang++).
 # Usage: cmake -DCMAKE_TOOLCHAIN_FILE=OXDK/cmake/toolchain.cmake [options]
-# Optional: -DOXDK_XDK_DIR=<path>   (default: OXDK/xdk)
+# -DOXDK_XDK_DIR=<path>   (default: OXDK/xdk)
+# -DOXDK_LLVM_DIR=<path>  (default: LLVM install with libc++ headers)
+# -DOXDK_LINKER=<exe_path>(default: lld-link for non-Windows host, tries to find MSVC link.exe on Windows)
 
-# Runs after CMake sets its own per-language rule defaults, so it can reliably override them.
+# Reliably override cmake defaults
 set(CMAKE_USER_MAKE_RULES_OVERRIDE     "${CMAKE_CURRENT_LIST_DIR}/rulesoverride.cmake")
 set(CMAKE_USER_MAKE_RULES_OVERRIDE_CXX "${CMAKE_CURRENT_LIST_DIR}/rulesoverride.cmake")
 
 # Resolves clang/clang++, libc++ headers, OXDK_LINK_EXE/OXDK_LIB_EXE.
 include("${CMAKE_CURRENT_LIST_DIR}/resolvehostdeps.cmake")
 
-# XDK path resolution
 if(NOT DEFINED ENV{OXDK_DIR})
     if(DEFINED OXDK_DIR)
         set(ENV{OXDK_DIR} "${OXDK_DIR}")
@@ -36,25 +37,20 @@ if(NOT EXISTS "$ENV{OXDK_XDK_DIR}/lib/xboxkrnl.lib")
         "Set OXDK_XDK_DIR to your XDK path or copy XDK files into OXDK/xdk/")
 endif()
 
-# Cross-compilation target
 set(CMAKE_SYSTEM_NAME      Windows)
 set(CMAKE_SYSTEM_PROCESSOR i386)
 
-# Don't search for programs/libraries/headers inside a sysroot -- we manage
-# all include and lib paths explicitly via compiler/linker flags.
+# don't search for programs/libraries/headers inside a sysroot - everything is managed here
 set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
 set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY NEVER)
 set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE NEVER)
 
-# Use STATIC_LIBRARY mode for try_compile so it doesn't need a full link.
 set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
 
-# File suffixes
 set(CMAKE_STATIC_LIBRARY_SUFFIX ".lib")
 set(CMAKE_EXECUTABLE_SUFFIX     ".exe")
 set(CMAKE_SHARED_LIBRARY_SUFFIX ".dll")
 
-# Common C/C++ flags (mirrors OXDK_TARGET_FLAGS + OXDK_COMMON_FLAGS in oxdk.mk).
 set(_oxdk_common_flags
     "-target i386-pc-windows-msvc -march=pentium3"
     "-fms-extensions -fms-compatibility -fms-compatibility-version=13.10"
@@ -68,7 +64,7 @@ set(_oxdk_common_flags
 )
 list(JOIN _oxdk_common_flags " " _oxdk_common_flags)
 
-# XDK isystem: normal priority for C, but appended dead last for C++ so libc++'s headers win.
+# xdk isystem: normal priority for C, but appended last for C++ so libc++'s headers win.
 set(CMAKE_C_FLAGS_INIT   "${_oxdk_common_flags} -isystem $ENV{OXDK_XDK_DIR}/include")
 
 set(_oxdk_libcxx_inc "$ENV{OXDK_LLVM_DIR}/include/c++/v1")
@@ -86,13 +82,12 @@ set(CMAKE_CXX_FLAGS_INIT
 # into CMAKE_<LANG>_FLAGS_DEBUG_INIT for GNU-frontend clang, regardless of
 # CMAKE_MSVC_RUNTIME_LIBRARY (that variable only applies to clang-cl/real MSVC).
 # _CRTIMP in the XDK headers means dllimport under -D_DLL, so this expects
-# CRT symbols as __imp_* -- but we link the static libcmtd.lib below, which
+# CRT symbols as __imp_* - but we link the static libcmtd.lib below, which
 # has plain symbols. Same class of "clobbered by a platform module" bug
 # rulesoverride.cmake already fights; force the static-CRT flags there too.
 set(_OXDK_C_FLAGS_DEBUG   "-O0 -g -Xclang -gcodeview -D_DEBUG -D_MT -Xclang --dependent-lib=libcmtd")
 set(_OXDK_CXX_FLAGS_DEBUG "${_OXDK_C_FLAGS_DEBUG}")
 
-# ── Linker setup ───────────────────────────────────────────────────────────────
 set(CMAKE_LINKER "${OXDK_LINK_EXE}")
 set(CMAKE_AR     "${OXDK_LIB_EXE}")
 
@@ -115,8 +110,7 @@ set(_oxdk_crt_helpers
      /alternatename:__ftol2@8=__ftol2"
 )
 
-# No prebuilt libc++.a for i386-xbox -- compile libcxx_runtime.cpp's shim
-# symbols once here and splice into every link.
+# compile libcxx_runtime.cpp's shim symbols once here and splice into every link
 set(_oxdk_libcxx_shim_src "$ENV{OXDK_DIR}/oxdk/libcxx-shim/libcxx_runtime.cpp")
 set(_oxdk_libcxx_shim_dir "$ENV{OXDK_DIR}/oxdk/libcxx-shim/.build")
 set(_oxdk_libcxx_shim_obj "${_oxdk_libcxx_shim_dir}/libcxx_runtime.obj")
@@ -148,7 +142,7 @@ if(NOT EXISTS "${_oxdk_libcxx_shim_lib}" OR "${_oxdk_libcxx_shim_src}" IS_NEWER_
     endif()
 endif()
 
-# Default XDK libs, linked implicitly into every executable
+# default XDK libs
 set(_oxdk_default_lib_names
     libcmtd.lib libcpmtd.lib xboxkrnl.lib
     d3d8d.lib d3dx8d.lib xgraphicsd.lib dsoundd.lib
@@ -163,7 +157,6 @@ foreach(_oxdk_lib_name ${_oxdk_default_lib_names})
     string(APPEND _oxdk_default_libs " \"$ENV{OXDK_XDK_DIR}/lib/${_oxdk_lib_name}\"")
 endforeach()
 
-# Base linker flag
 set(_oxdk_common_link_flags
     "/nologo /subsystem:windows /fixed:no\
      /machine:x86 /nodefaultlib /force:multiple\
@@ -174,8 +167,6 @@ set(_oxdk_common_link_flags
      \"${_oxdk_libcxx_shim_lib}\""
 )
 
-# Private names, not CMAKE_EXE_LINKER_FLAGS_INIT -- Windows-GNU.cmake clobbers that.
-# rulesoverride.cmake force-applies these into the real cache vars.
 set(_OXDK_EXE_LINKER_FLAGS
     "${_oxdk_common_link_flags}\
     /base:0x00010000\
@@ -185,9 +176,10 @@ set(_OXDK_EXE_LINKER_FLAGS
 )
 set(_OXDK_SHARED_LINKER_FLAGS "${_oxdk_common_link_flags}")
 
-# C/C++ standards
+set(_OXDK_EXE_LINKER_FLAGS_DEBUG    "/DEBUG")
+set(_OXDK_SHARED_LINKER_FLAGS_DEBUG "/DEBUG")
+
 set(CMAKE_C_STANDARD   11)
 set(CMAKE_CXX_STANDARD 17)
 
-# Host tools
 include("$ENV{OXDK_DIR}/cmake/hosttools.cmake")

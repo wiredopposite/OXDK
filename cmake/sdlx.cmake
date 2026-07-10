@@ -63,8 +63,8 @@ target_compile_definitions(oxdk_sdlx PUBLIC
 
 # SDL_xboxevents.c unconditionally #defines DEBUG_KEYBOARD/DEBUG_MOUSE itself
 # (unless _XBOX_DONT_USE_DEVICES is set, which breaks compilation elsewhere in
-# libSDLx -- see the sdl_test Makefile's comment on this). That path calls
-# XInputDebug* functions, which live in xkbd.lib, not the default XDK libs.
+# libSDLx - see the sdl_test Makefile's comment). That path calls XInputDebug* 
+# methods, which live in xkbd.lib.
 target_link_libraries(oxdk_sdlx PUBLIC "$ENV{OXDK_XDK_DIR}/lib/xkbd.lib")
 
 add_library(Oxdk::sdlx ALIAS oxdk_sdlx)
