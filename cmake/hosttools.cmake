@@ -78,6 +78,10 @@ function(OxdkAddResource EXECUTABLE_TARGET_NAME)
         message(FATAL_ERROR "Target ${ARG_DISC_NAME}_DISC does not exist.")
     endif()
 
+    if(NOT ARG_DISC_PATH)
+        set(ARG_DISC_PATH "")
+    endif()
+
     set(ABS_DISC_PATH "${CMAKE_BINARY_DIR}/discs/${ARG_DISC_NAME}/${ARG_DISC_PATH}")
 
     add_custom_command(TARGET ${EXECUTABLE_TARGET_NAME} POST_BUILD
@@ -89,7 +93,7 @@ function(OxdkAddResource EXECUTABLE_TARGET_NAME)
 endfunction()
 
 function(OxdkAddResources EXECUTABLE_TARGET_NAME)
-    cmake_parse_arguments(ARG "" "DISC_NAME;DIRECTORY;RELATIVE_PATH" "" ${ARGN})
+    cmake_parse_arguments(ARG "" "DISC_NAME;DIRECTORY;BASE_DIRECTORY" "" ${ARGN})
 
     if(NOT ARG_DIRECTORY)
         message(FATAL_ERROR "DIRECTORY argument is required for OxdkAddResources.")
@@ -99,8 +103,8 @@ function(OxdkAddResources EXECUTABLE_TARGET_NAME)
         set(ARG_DISC_NAME "${EXECUTABLE_TARGET_NAME}")
     endif()
 
-    if(NOT ARG_RELATIVE_PATH)
-        set(ARG_RELATIVE_PATH "${ARG_DIRECTORY}")
+    if(NOT ARG_BASE_DIRECTORY)
+        set(ARG_BASE_DIRECTORY "${ARG_DIRECTORY}")
     endif()
 
     if(NOT TARGET ${ARG_DISC_NAME}_DISC)
@@ -111,7 +115,7 @@ function(OxdkAddResources EXECUTABLE_TARGET_NAME)
     foreach(_resource ${_resources})
         cmake_path(
             RELATIVE_PATH _resource 
-            BASE_DIRECTORY "${ARG_RELATIVE_PATH}" 
+            BASE_DIRECTORY "${ARG_BASE_DIRECTORY}" 
             OUTPUT_VARIABLE _relative_path
         )
         OxdkAddResource(
