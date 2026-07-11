@@ -83,8 +83,7 @@ set(CMAKE_CXX_FLAGS_INIT
 # CMAKE_MSVC_RUNTIME_LIBRARY (that variable only applies to clang-cl/real MSVC).
 # _CRTIMP in the XDK headers means dllimport under -D_DLL, so this expects
 # CRT symbols as __imp_* - but we link the static libcmtd.lib below, which
-# has plain symbols. Same class of "clobbered by a platform module" bug
-# rulesoverride.cmake already fights; force the static-CRT flags there too.
+# has plain symbols.
 set(_OXDK_C_FLAGS_DEBUG   "-O0 -g -Xclang -gcodeview -D_DEBUG -D_MT -Xclang --dependent-lib=libcmtd")
 set(_OXDK_CXX_FLAGS_DEBUG "${_OXDK_C_FLAGS_DEBUG}")
 
@@ -140,6 +139,8 @@ if(NOT EXISTS "${_oxdk_libcxx_shim_lib}" OR "${_oxdk_libcxx_shim_src}" IS_NEWER_
     if(NOT _oxdk_shim_ar_rc EQUAL 0)
         message(FATAL_ERROR "Failed to archive libc++ runtime shim:\n${_oxdk_shim_ar_out}\n${_oxdk_shim_ar_err}")
     endif()
+
+    set_directory_properties(PROPERTIES ADDITIONAL_MAKE_CLEAN_FILES "${_oxdk_libcxx_shim_dir}")
 endif()
 
 # default XDK libs
