@@ -14,26 +14,53 @@ function(OxdkCreateDisc EXECUTABLE_TARGET_NAME)
     endif()
 
     if(NOT TARGET ${ARG_DISC_NAME}_DISC)
-        add_custom_target(${ARG_DISC_NAME}_DISC)
+        add_custom_target(${ARG_DISC_NAME}_DISC ALL)
     else()
         message(FATAL_ERROR "Target ${ARG_DISC_NAME}_DISC already exists.")
     endif()
 
     include("${CMAKE_CURRENT_FUNCTION_LIST_DIR}/hosttoolsprivate.cmake")
-    OxdkEnsureCxbe(${EXECUTABLE_TARGET_NAME} _cxbe_exe)
-    set(_xbe_out "${CMAKE_BINARY_DIR}/discs/${ARG_DISC_NAME}/default.xbe")
 
+    OxdkEnsureCxbe(${EXECUTABLE_TARGET_NAME} _cxbe_exe)
+    OxdkEnsureExtractXiso(${EXECUTABLE_TARGET_NAME} _extract_xiso_exe)
+
+    set(_disc_path "${CMAKE_BINARY_DIR}/discs/${ARG_DISC_NAME}")
+    set(_xbe_out "${_disc_path}/default.xbe")
+    set(_xiso_out "${_disc_path}.iso")
+
+    cmake_path(NATIVE_PATH _disc_path _disc_path)
+    cmake_path(NATIVE_PATH _xiso_out _xiso_out)
+
+    # cxbe (and any OxdkAddResource copies registered after this call) run as
+    # POST_BUILD steps on EXECUTABLE_TARGET_NAME; extract-xiso must run after
+    # ALL of those finish, so it lives on the dependent _DISC target instead
+    # of bundled into the same POST_BUILD block. We could make a whole system
+    # of dependencies to ensure the xiso is created every time the main target
+    # is built, but for now just rely on the dependency on the _DISC target.
     add_custom_command(TARGET ${EXECUTABLE_TARGET_NAME} POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_BINARY_DIR}/discs/${ARG_DISC_NAME}"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${_disc_path}"
         COMMAND "${_cxbe_exe}"
             "-MODE:${ARG_MODE}"
             "-TITLE:${ARG_TITLE_NAME}"
             "-OUT:${_xbe_out}"
             "$<TARGET_FILE:${EXECUTABLE_TARGET_NAME}>"
-        BYPRODUCTS "${_xbe_out}"
         COMMENT "cxbe: ${EXECUTABLE_TARGET_NAME}.exe -> ${_xbe_out}"
+        BYPRODUCTS "${_xbe_out}"
         VERBATIM
     )
+
+    add_custom_command(TARGET ${ARG_DISC_NAME}_DISC POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E chdir "${CMAKE_CURRENT_BINARY_DIR}"
+            "${_extract_xiso_exe}"
+            "-c"
+            "${_disc_path}"
+            "${_xiso_out}"
+        WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
+        COMMENT "extract-xiso: ${_disc_path} -> ${_xiso_out}"
+        BYPRODUCTS "${_xiso_out}"
+        VERBATIM
+    )
+    add_dependencies(${ARG_DISC_NAME}_DISC ${EXECUTABLE_TARGET_NAME})
 endfunction()
 
 function(OxdkAddResource EXECUTABLE_TARGET_NAME)
